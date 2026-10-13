@@ -1,0 +1,116 @@
+# =============================================================================
+# Catálogo de cajas conectadas a Caja Link.
+#
+# Este archivo es el ÚNICO lugar donde se declara qué cajas existen y cómo se
+# consulta cada una. El código de src/ no tiene direcciones ni credenciales.
+#
+# Para sumar una caja nueva:
+#   1. Agregar aquí una entrada con su conector (rest-json, soap o flat-file).
+#   2. Poner sus variables (URL, credenciales, token) en .env.
+#   3. Reiniciar el servicio.
+#
+# Las claves que terminan en "_env" guardan el NOMBRE de una variable de
+# entorno, nunca su valor: así ningún secreto queda escrito en el repositorio.
+# =============================================================================
+
+# Variable con el token del administrador (solo sirve para leer la auditoría).
+admin_token_env: ADMIN_TOKEN
+
+# Política de fallas que aplica a todas las cajas (cada caja puede cambiarla).
+defaults:
+  timeout_seconds: 2.5     # tiempo máximo de un intento
+  retries: 2               # reintentos cuando la caja falla rápido (503 o conexión rechazada)
+  deadline_seconds: 3.5    # tope total por caja, sumando reintentos (el contrato exige < 5 s)
+
+cajas:
+  # --- Caja Norte: REST JSON ---------------------------------------------------
+  - id: NORTE
+    enabled: true
+    consumer_token_env: NORTE_TOKEN          # token con el que Norte consulta a Caja Link
+    connector: rest-json
+    request:
+      base_url_env: CAJA_NORTE_URL
+      path: /api/v1/afiliados/{document}
+      auth:
+        type: header                         # la credencial viaja en un encabezado propio
+        header: X-Api-Key
+        value_env: CAJA_NORTE_API_KEY
+    response:
+      affiliations: afiliaciones             # lista de afiliaciones dentro del JSON
+      valid_from: fechaInicio
+      valid_to: fechaFin
+      affiliate_type: tipoAfiliado
+      date_format: "%Y-%m-%d"
+      not_found_error: NO_ENCONTRADO         # único 404 que significa "la persona no existe"
+    affiliate_types:
+      DEPENDIENTE: DEPENDIENTE
+      INDEPENDIENTE: INDEPENDIENTE
+      PENSIONADO: PENSIONADO
+
+  # --- Caja Oriente: SOAP 1.1 ---------------------------------------------------
+  - id: ORIENTE
+    enabled: true
+    consumer_token_env: ORIENTE_TOKEN
+    connector: soap
+    request:
+      url_env: CAJA_ORIENTE_URL
+      user_env: CAJA_ORIENTE_USER
+      password_env: CAJA_ORIENTE_PASSWORD
+      namespace: http://cajaoriente.example/afiliacion
+      soap_action: ConsultarAfiliacion
+      document_digits: 12                    # Oriente exige 12 dígitos con ceros a la izquierda
+    response:
+      found: Encontrado
+      affiliation: Afiliacion
+      valid_from: FechaIngreso
+      valid_to: FechaRetiro
+      affiliate_type: TipoAfiliado
+      date_format: "%d/%m/%Y"
+    affiliate_types:
+      D: DEPENDIENTE
+      I: INDEPENDIENTE
+      P: PENSIONADO
+
+  # --- Caja Centro: archivo plano diario ----------------------------------------
+  - id: CENTRO
+    enabled: true
+    consumer_token_env: CENTRO_TOKEN
+    connector: flat-file
+    request:
+      dir_env: CAJA_CENTRO_DIR
+      pattern: "centro_afiliados_*.txt"      # se usa siempre el archivo más reciente
+      delimiter: "|"
+    response:
+      cutoff: FECHA_CORTE                    # primera línea del archivo: fecha de la información
+      document: NUMERO_DOCUMENTO
+      valid_from: FECHA_INICIO
+      valid_to: FECHA_FIN
+      affiliate_type: TIPO_AFILIADO
+      date_format: "%Y%m%d"
+    affiliate_types:
+      DEP: DEPENDIENTE
+      IND: INDEPENDIENTE
+      PEN: PENSIONADO
+
+  # --- Caja Sur: REST JSON v2 (cuarta caja, se activa con CAJA_SUR_ENABLED) ------
+  - id: SUR
+    enabled_env: CAJA_SUR_ENABLED
+    consumer_token_env: SUR_TOKEN
+    connector: rest-json
+    request:
+      base_url_env: CAJA_SUR_URL
+      path: /v2/people/{document}/memberships
+      auth:
+        type: bearer                         # Authorization: Bearer <valor>
+        value_env: CAJA_SUR_TOKEN
+    response:
+      affiliations: memberships
+      valid_from: start
+      valid_to: end
+      affiliate_type: category
+      date_format: "%Y-%m-%d"
+      not_found_error: person_not_found
+    affiliate_types:
+      DEPENDENT: DEPENDIENTE
+      SELF_EMPLOYED: INDEPENDIENTE
+      RETIREE: PENSIONADO

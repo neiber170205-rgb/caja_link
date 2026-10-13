@@ -1,0 +1,27 @@
+# =============================================================================
+# Librerías de Caja Link: qué es cada una y para qué la usamos.
+# Las versiones van fijas para que el entorno se construya igual en cualquier
+# máquina (la del equipo y el servidor que califica).
+# =============================================================================
+
+# FastAPI — framework web. Con él se declaran las rutas del contrato
+# (/api/v1/affiliations/..., /api/v2/..., lote y auditoría), se leen parámetros
+# y encabezados, y se devuelven diccionarios de Python como respuestas JSON.
+fastapi==0.115.6
+
+# Uvicorn — servidor ASGI. Es el proceso que escucha en el puerto 8083 y le
+# entrega cada petición HTTP a la aplicación FastAPI.
+uvicorn==0.34.0
+
+# HTTPX — cliente HTTP asíncrono. Con él Caja Link consulta a las cajas REST y
+# SOAP en paralelo y con tiempo máximo, para responder en menos de 5 segundos
+# aunque una caja esté lenta.
+httpx==0.28.1
+
+# PyYAML — lector de YAML. Convierte config/cajas.yaml en diccionarios de Python;
+# gracias a esto las cajas se declaran por configuración y no en el código.
+PyYAML==6.0.2
+
+# defusedxml — lector de XML seguro. Interpreta la respuesta SOAP de Caja Oriente
+# bloqueando ataques conocidos de XML (entidades externas, "billion laughs").
+defusedxml==0.7.1
