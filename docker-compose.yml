@@ -33,13 +33,22 @@ services:
     ports:
       - "${CAJA_SUR_PORT:-9004}:9004"
 
-  # Agreguen aquí su servicio de interoperabilidad (puerto de contrato 8083).
-  # Caja Centro no tiene servicio: monten ./caja-centro (archivo plano diario).
-  # caja-link:
-  #   build: ./src
-  #   env_file: .env
-  #   ports:
-  #     - "8083:8083"
-  #   volumes:
-  #     - ./caja-centro:/data/caja-centro:ro
-  #     - ./config:/app/config:ro
+  # Servicio de interoperabilidad del equipo (puerto de contrato 8083).
+  # Solo ve de las cajas lo que ellas publican: sus servicios por la red interna,
+  # el archivo diario de Caja Centro y el catálogo de config/ (ambos de solo lectura).
+  # No depende de que las cajas estén arriba: si una no responde, lo informa.
+  caja-link:
+    build: ./src
+    env_file: .env
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./caja-centro:/data/caja-centro:ro
+      - ./config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
