@@ -1,0 +1,23 @@
+{
+  "cases": [
+    {
+      "document": "8873901472",
+      "hash": "7eab86b41a6c52d6a2ba462dfafe5dbea7c097abf55f1d8b6ed52f3359456abc",
+      "requester": "ORIENTE"
+    },
+    {
+      "document": "91336507",
+      "hash": "1dcf972ff5b00285594511292f73199a44b160e09f49f8cdcbfe4c943ab97b07",
+      "requester": "CENTRO"
+    },
+    {
+      "document": "3712776370",
+      "hash": "4e76278082c3f9754bcd2e88473cf2fef22e9649aa04554382f7b2e7ac71f891",
+      "requester": "NORTE"
+    }
+  ],
+  "centro_as_of": "2026-10-03",
+  "centro_document": "1315966777",
+  "level": "profesional",
+  "salt": "profesional-2026"
+}

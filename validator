@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""Validador del equipo — Caja Link.
+
+Uso: ./validator check [--lote]
+     ./validator entregables [--desde AAAA-MM-DDTHH:MM]
+
+entregables revisa ADR, modelo de amenazas, prueba de carga, config/cajas.yaml, OpenAPI, Git y
+AI_USAGE.md con las mismas reglas y puntos del calificador oficial (no necesita Docker).
+
+Revisa el contrato del servicio en el puerto 8083 con una muestra pública. No contiene
+respuestas esperadas en claro (usa huellas con sal). Usa POST /__chaos de Caja Norte y la
+deja de nuevo en modo "ok". Con --lote envía data/lote_10000.csv y mide el tiempo
+(sin revisar resultados). La cuarta caja (P14) solo la evalúa el validador oficial.
+"""
+
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SERVICE = "http://localhost:{0}".format(os.environ.get("SERVICE_PORT", "8083"))
+PURPOSE = "VALIDACION_AFILIACION"
+CHECKS = [
+    ("P01", "Autenticacion", 30), ("P02", "Finalidad", 30), ("P03", "Resultados", 70), ("P04", "Normalizacion", 20),
+    ("P05", "Exclusion consultante", 20), ("P06", "Dato minimo", 40), ("P07", "Caja caida", 60), ("P08", "Caja lenta", 30),
+    ("P09", "Fuente por archivo", 30), ("P10", "Lote", 60), ("P11", "Idempotencia lote", 20), ("P12", "Versionado", 30),
+    ("P13", "Auditoria", 20), ("P14", "Cuarta caja", 40),
+]
+OFFICIAL_ONLY = {"P14"}
+FORBIDDEN = {"nombre", "nombres", "nombrecompleto", "name", "fullname", "firstname", "lastname", "apellidos", "direccion", "address", "telefono",
+             "phone", "celular", "correo", "email", "mail", "salario", "salary", "monthlysalary", "ingresos", "beneficiarios", "beneficiaries", "titular", "person"}
+AUDIT_FIELDS = ["timestamp", "requestingCaja", "purpose", "result", "documentMasked"]
+
+
+def fingerprint(value, salt):
+    return hashlib.pbkdf2_hmac("sha256", value.encode("utf-8"), salt.encode("utf-8"), 200000).hex()
+
+
+def read_env():
+    values = {}
+    for name in (".env", ".env.example"):
+        path = os.path.join(HERE, name)
+        if os.path.exists(path):
+            for line in open(path, encoding="utf-8"):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    values.setdefault(key.strip(), value.strip())
+    return values
+
+
+def request(method, url, token=None, data=None, headers=None, timeout=10):
+    all_headers = dict(headers or {})
+    if token:
+        all_headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(url, data=data, headers=all_headers, method=method)
+    started = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace"), time.time() - started
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace"), time.time() - started
+    except Exception as exc:
+        return None, str(exc), time.time() - started
+
+
+def as_json(text):
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def keys_of(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            yield str(key)
+            for nested in keys_of(value):
+                yield nested
+    elif isinstance(obj, list):
+        for item in obj:
+            for nested in keys_of(item):
+                yield nested
+
+
+def caja(value):
+    return re.sub(r"[^A-Z]", "", str(value or "").upper()).replace("CAJA", "")
+
+
+def cajas_of(body):
+    matches = body.get("matches") if isinstance(body, dict) else None
+    return sorted({caja(m.get("caja")) for m in matches if isinstance(m, dict)}) if isinstance(matches, list) else []
+
+
+def with_dots(doc):
+    rev = doc[::-1]
+    return ".".join(rev[i:i + 3] for i in range(0, len(rev), 3))[::-1]
+
+
+class Validator:
+    def __init__(self, run_batch):
+        self.public = json.load(open(os.path.join(HERE, ".validator.json"), encoding="utf-8"))
+        self.env = read_env()
+        self.norte = "http://localhost:{0}".format(self.env.get("CAJA_NORTE_PORT", "9001"))
+        self.run_batch = run_batch
+        self.results, self.details, self.bodies = {}, {}, []
+
+    def token(self, caja_name):
+        return self.env.get(caja_name + "_TOKEN", "")
+
+    def record(self, check_id, fraction, detail=""):
+        self.results[check_id] = max(0.0, min(1.0, fraction))
+        if detail:
+            self.details[check_id] = detail
+
+    def query(self, document, requester, version="v1", purpose=PURPOSE, timeout=10):
+        url = "{0}/api/{1}/affiliations/{2}".format(SERVICE, version, urllib.parse.quote(document, safe=""))
+        if purpose is not None:
+            url += "?purpose=" + purpose
+        status, text, elapsed = request("GET", url, self.token(requester) if requester else None, timeout=timeout)
+        body = as_json(text)
+        if status == 200:
+            self.bodies.append(body)
+        return status, body, elapsed
+
+    def matches_hash(self, body, case):
+        if not isinstance(body, dict):
+            return False
+        return fingerprint("|".join([str(body.get("result"))] + cajas_of(body)), self.public["salt"]) == case["hash"]
+
+    def chaos(self, mode):
+        status, _, _ = request("POST", self.norte + "/__chaos", data=json.dumps({"mode": mode}).encode("utf-8"), headers={"Content-Type": "application/json"}, timeout=5)
+        return status
+
+    def p01(self):
+        doc = self.public["cases"][0]["document"]
+        no_token, _, _ = request("GET", "{0}/api/v1/affiliations/{1}?purpose={2}".format(SERVICE, doc, PURPOSE))
+        caja_audit, _, _ = request("GET", SERVICE + "/api/v1/audit?limit=5", self.token("NORTE"))
+        admin_audit, _, _ = request("GET", SERVICE + "/api/v1/audit?limit=5", self.token("ADMIN"))
+        parts = [no_token == 401, caja_audit in (401, 403), admin_audit == 200]
+        self.record("P01", sum(parts) / 3.0, "" if all(parts) else "sin token={0} (401), auditoria con token de caja={1} (401/403), con ADMIN={2} (200)".format(no_token, caja_audit, admin_audit))
+
+    def p02(self):
+        case = self.public["cases"][0]
+        missing, _, _ = self.query(case["document"], case["requester"], purpose=None)
+        invalid, _, _ = self.query(case["document"], case["requester"], purpose="MERCADEO")
+        self.record("P02", 0.5 * (missing == 400) + 0.5 * (invalid == 400), "" if missing == invalid == 400 else "sin purpose={0}, invalido={1} (400)".format(missing, invalid))
+
+    def p03(self):
+        good, notes = 0, []
+        for case in self.public["cases"]:
+            status, body, _ = self.query(case["document"], case["requester"])
+            if status == 200 and self.matches_hash(body, case):
+                good += 1
+            else:
+                notes.append("{0} ({1}): HTTP {2} result={3} cajas={4}".format(case["document"], case["requester"], status, (body or {}).get("result") if isinstance(body, dict) else None, cajas_of(body)))
+        self.record("P03", good / float(len(self.public["cases"])), "; ".join(notes))
+
+    def p04(self):
+        case = self.public["cases"][0]
+        variants = [with_dots(case["document"]), case["document"].zfill(12), " {0} ".format(case["document"])]
+        good = sum(1 for v in variants if (lambda r: r[0] == 200 and self.matches_hash(r[1], case))(self.query(v, case["requester"])))
+        self.record("P04", good / float(len(variants)), "" if good == len(variants) else "{0}/{1} variantes con puntos/ceros/espacios dan el mismo resultado".format(good, len(variants)))
+
+    def p05(self):
+        bad = []
+        for case in self.public["cases"]:
+            status, body, _ = self.query(case["document"], case["requester"])
+            if status != 200 or caja(case["requester"]) in cajas_of(body):
+                bad.append("{0} ({1}): HTTP {2}".format(case["document"], case["requester"], status))
+        self.record("P05", 1 - len(bad) / float(len(self.public["cases"])), "; ".join(bad))
+
+    def p06(self):
+        if len(self.bodies) < 3:
+            return self.record("P06", 0, "Muy pocas respuestas 200 para revisar")
+        found = sorted({k for b in self.bodies for k in keys_of(b) if re.sub(r"[^a-z]", "", k.lower()) in FORBIDDEN})
+        self.record("P06", 0 if found else 1, "Claves prohibidas: " + ", ".join(found) if found else "Solo claves (el oficial también busca valores personales)")
+
+    def p07(self):
+        case = [c for c in self.public["cases"] if c["requester"] != "NORTE"][0]
+        if self.chaos("down") != 200:
+            return self.record("P07", 0, "No se pudo usar POST /__chaos en Caja Norte ({0})".format(self.norte))
+        try:
+            status, body, _ = self.query(case["document"], case["requester"])
+        finally:
+            self.chaos("ok")
+        result = body.get("result") if isinstance(body, dict) else None
+        unavailable = [caja(c) for c in (body.get("unavailable") or [])] if isinstance(body, dict) else []
+        ok = status == 200 and result != "NO_AFILIADO" and (result == "AFILIADO_OTRA_CAJA" or "NORTE" in unavailable)
+        self.record("P07", 1 if ok else 0, "" if ok else "Norte caída: HTTP {0} result={1} unavailable={2} (nunca NO_AFILIADO; si no hay otra coincidencia, INDETERMINADO con NORTE en unavailable)".format(status, result, unavailable))
+
+    def p08(self):
+        case = self.public["cases"][0]
+        if self.chaos("slow") != 200:
+            return self.record("P08", 0, "No se pudo usar POST /__chaos en Caja Norte")
+        try:
+            status, body, elapsed = self.query(case["document"], case["requester"], timeout=15)
+        finally:
+            self.chaos("ok")
+        ok = status == 200 and elapsed < 5
+        self.record("P08", 1 if ok else 0, "" if ok else "Norte lenta: HTTP {0} en {1:.1f} s (máximo 5 s)".format(status, elapsed))
+
+    def p09(self):
+        status, body, _ = self.query(self.public["centro_document"], "NORTE")
+        centro = [m for m in (body.get("matches") or []) if isinstance(m, dict) and caja(m.get("caja")) == "CENTRO"] if isinstance(body, dict) else []
+        ok = bool(centro) and str(centro[0].get("source", "")).upper() == "FILE" and str(centro[0].get("asOf", ""))[:10] == self.public["centro_as_of"]
+        self.record("P09", 1 if ok else 0, "" if ok else "Se esperaba match CENTRO con source=FILE y asOf={0} (HTTP {1})".format(self.public["centro_as_of"], status))
+
+    def p10_p11(self):
+        if not self.run_batch:
+            return
+        payload = open(os.path.join(HERE, "data", "lote_10000.csv"), "rb").read()
+        key = "validator-" + uuid.uuid4().hex
+        headers = {"Idempotency-Key": key, "Content-Type": "text/csv"}
+        started = time.time()
+        status, text, _ = request("POST", SERVICE + "/api/v1/batch-checks", self.token("NORTE"), payload, headers, timeout=120)
+        job = (as_json(text) or {}).get("jobId") if isinstance(as_json(text), dict) else None
+        if status != 202 or not job:
+            self.record("P10", 0, "POST /api/v1/batch-checks -> {0} (se espera 202 con jobId)".format(status))
+            return self.record("P11", 0, "Requiere jobId")
+        again_status, again_text, _ = request("POST", SERVICE + "/api/v1/batch-checks", self.token("NORTE"), payload, headers, timeout=120)
+        again = (as_json(again_text) or {}).get("jobId") if isinstance(as_json(again_text), dict) else None
+        self.record("P11", 1 if again == job else 0, "" if again == job else "Misma Idempotency-Key -> jobId {0} (esperado {1})".format(again, job))
+        state = None
+        while time.time() - started <= 300:
+            _, poll, _ = request("GET", "{0}/api/v1/batch-checks/{1}".format(SERVICE, job), self.token("NORTE"), timeout=60)
+            body = as_json(poll) if isinstance(as_json(poll), dict) else {}
+            state = body.get("status")
+            if state == "DONE":
+                count = len(body.get("results") or [])
+                return self.record("P10", 1 if count >= 10000 else count / 10000.0, "DONE en {0:.0f} s con {1} resultados (la exactitud la revisa el oficial)".format(time.time() - started, count))
+            time.sleep(3)
+        self.record("P10", 0, "No terminó en 300 s (último estado: {0})".format(state))
+
+    def p12(self):
+        case = self.public["cases"][0]
+        s2, b2, _ = self.query(case["document"], case["requester"], version="v2")
+        s1, b1, _ = self.query(case["document"], case["requester"])
+        v2 = s2 == 200 and all(isinstance(m, dict) and str(m.get("affiliateType", "")).upper() in ("DEPENDIENTE", "INDEPENDIENTE", "PENSIONADO") for m in (b2 or {}).get("matches") or [{}])
+        v1 = s1 == 200 and "affiliateType" not in set(keys_of(b1)) and self.matches_hash(b1, case)
+        self.record("P12", 0.5 * v2 + 0.5 * v1, "" if v1 and v2 else "v2 con affiliateType={0}; v1 sin cambios={1}".format(v2, v1))
+
+    def p13(self):
+        status, text, _ = request("GET", SERVICE + "/api/v1/audit?limit=100", self.token("ADMIN"))
+        body = as_json(text)
+        entries = body if isinstance(body, list) else next((body[k] for k in ("entries", "items", "data", "results") if isinstance(body, dict) and isinstance(body.get(k), list)), [])
+        entries = [e for e in entries if isinstance(e, dict)]
+        if not entries:
+            return self.record("P13", 0, "HTTP {0}: sin entradas".format(status))
+        complete = sum(1 for e in entries if all(e.get(f) not in (None, "") for f in AUDIT_FIELDS))
+        masked = sum(1 for e in entries if e.get("documentMasked") and len(re.sub(r"\D", "", str(e["documentMasked"]))) <= 4)
+        self.record("P13", 0.5 * complete / len(entries) + 0.5 * masked / len(entries), "{0} entradas, {1} completas, {2} enmascaradas".format(len(entries), complete, masked))
+
+    def run_all(self):
+        for name in ("p01", "p02", "p03", "p04", "p05", "p09", "p12", "p07", "p08", "p06", "p13", "p10_p11"):
+            try:
+                getattr(self, name)()
+            except Exception as exc:
+                self.record(name[:3].upper(), 0, "Error del validador: {0}".format(exc))
+
+
+def print_table(checks, results, details):
+    width = 40
+    print("=" * width)
+    print("CAJA LINK VALIDATOR".center(width).rstrip())
+    print("=" * width)
+    earned_total, max_total, passed = 0, 0, 0
+    for check_id, name, points in checks:
+        label = "{0} {1} ".format(check_id, name).ljust(29, ".")
+        max_total += points
+        if check_id not in results:
+            print("{0} {1} {2}".format(label, "N/E".ljust(7), "+0".rjust(4)))
+            continue
+        fraction = results[check_id]
+        earned = int(round(points * fraction))
+        status = "PASS" if fraction >= 0.999 else ("PARCIAL" if fraction > 0 else "FAIL")
+        passed += status == "PASS"
+        earned_total += earned
+        print("{0} {1} {2}".format(label, status.ljust(7), ("+" + str(earned)).rjust(4)))
+    print("-" * width)
+    print("PRUEBAS: {0} / {1}   PUNTOS: {2} / {3}".format(passed, len(checks), earned_total, max_total))
+    print("N/E = no evaluada aquí (P10-P11 con --lote; P14 solo oficial)")
+    if details:
+        print()
+        for check_id, _, _ in checks:
+            if check_id in details:
+                print("  {0}: {1}".format(check_id, details[check_id]))
+
+
+def entregables(args):
+    import subprocess
+
+    return subprocess.call([sys.executable, os.path.join(HERE, ".entregables.py")] + list(args), cwd=HERE)
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "entregables":
+        return entregables(argv[2:])
+    if len(argv) < 2 or argv[1] != "check":
+        print(__doc__)
+        return 2
+    validator = Validator(run_batch="--lote" in argv[2:])
+    validator.run_all()
+    print_table(CHECKS, validator.results, validator.details)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
