@@ -1,0 +1,220 @@
+openapi: 3.0.3
+info:
+  title: Caja Link
+  version: 2.0.0
+  description: |
+    Servicio de interoperabilidad entre cajas de compensación familiar. Una caja
+    pregunta si un documento tiene afiliación vigente en otra caja, sin ver datos
+    personales (Ley 1581): solo caja, vigencia, fuente y fecha de corte.
+
+    Toda ruta exige el token de la caja que consulta (`Authorization: Bearer <token>`).
+    La auditoría solo se lee con el token de administrador.
+servers:
+  - url: http://localhost:8083
+    description: Entorno local (docker compose)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Consulta en línea
+    description: Consulta de un documento contra todas las cajas, en menos de 5 segundos.
+  - name: Auditoría
+    description: Registro de quién consultó, para qué y con qué resultado.
+
+paths:
+  /api/v1/affiliations/{document}:
+    get:
+      tags: [Consulta en línea]
+      summary: Consulta de afiliación (v1)
+      description: |
+        Para las cajas consumidoras. Revisa el documento en todas las cajas excepto la
+        que consulta y responde si tiene afiliación vigente en otra. Si alguna caja no
+        responde y las demás no tienen el documento, el resultado es INDETERMINADO
+        (nunca NO_AFILIADO) y esa caja aparece en `unavailable`.
+      parameters:
+        - $ref: '#/components/parameters/Document'
+        - $ref: '#/components/parameters/Purpose'
+      responses:
+        '200':
+          description: Resultado de la consulta.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AffiliationResponseV1' }
+              example:
+                requestId: 01M4XGBNN1Z3WGVNQKA6YFJM6E
+                result: AFILIADO_OTRA_CAJA
+                matches:
+                  - { caja: NORTE, validFrom: '2024-06-27', validTo: null, source: ONLINE, asOf: '2026-10-14' }
+                unavailable: []
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenAdmin' }
+
+  /api/v2/affiliations/{document}:
+    get:
+      tags: [Consulta en línea]
+      summary: Consulta de afiliación (v2, con tipo de afiliado)
+      description: |
+        Igual a la v1, y cada coincidencia agrega `affiliateType` (DEPENDIENTE,
+        INDEPENDIENTE o PENSIONADO). La v1 no cambia, para no romper a quien ya la usa.
+      parameters:
+        - $ref: '#/components/parameters/Document'
+        - $ref: '#/components/parameters/Purpose'
+      responses:
+        '200':
+          description: Resultado de la consulta con el tipo de afiliado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AffiliationResponseV2' }
+              example:
+                requestId: 01M4XGBNJXVA7P969CW9XSYWTP
+                result: AFILIADO_OTRA_CAJA
+                matches:
+                  - { caja: CENTRO, validFrom: '2025-02-11', validTo: null, source: FILE, asOf: '2026-10-03', affiliateType: PENSIONADO }
+                unavailable: []
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenAdmin' }
+
+  /api/v1/audit:
+    get:
+      tags: [Auditoría]
+      summary: Auditoría de consultas (solo administrador)
+      description: |
+        Para el administrador. Últimas consultas respondidas, de la más nueva a la más
+        vieja, en línea y por lote. El documento aparece enmascarado (solo los últimos
+        4 dígitos).
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Cuántas entradas devolver. Valores fuera de 1 a 1000 se ajustan al límite más cercano.
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+          example: 100
+      responses:
+        '200':
+          description: Entradas de auditoría.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuditEntry' }
+              example:
+                - timestamp: '2026-10-14T15:26:40.801Z'
+                  requestId: 01M4XGBNN1Z3WGVNQKA6YFJM6E
+                  requestingCaja: ORIENTE
+                  purpose: VALIDACION_AFILIACION
+                  result: AFILIADO_OTRA_CAJA
+                  documentMasked: '******1472'
+                  channel: ONLINE
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: El token es de una caja, no del administrador.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: PROHIBIDO, message: La auditoría solo se consulta con el token de administrador }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token de la caja (NORTE_TOKEN, ORIENTE_TOKEN, CENTRO_TOKEN, SUR_TOKEN) o ADMIN_TOKEN para la auditoría.
+
+  parameters:
+    Document:
+      name: document
+      in: path
+      required: true
+      description: Número de documento. Se aceptan puntos, espacios y ceros a la izquierda; se normalizan antes de consultar.
+      schema: { type: string }
+      example: '8873901472'
+    Purpose:
+      name: purpose
+      in: query
+      required: true
+      description: Finalidad de la consulta (obligatoria por la Ley 1581).
+      schema: { $ref: '#/components/schemas/Purpose' }
+      example: VALIDACION_AFILIACION
+
+  responses:
+    BadRequest:
+      description: Falta la finalidad, la finalidad no es válida o el documento tiene caracteres no permitidos.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: FINALIDAD_REQUERIDA, message: 'El parámetro purpose es obligatorio: TARIFA_SUBSIDIADA, SUBSIDIO_MONETARIO, VALIDACION_AFILIACION' }
+    Unauthorized:
+      description: Falta el token o no pertenece a ninguna caja.
+      headers:
+        WWW-Authenticate: { schema: { type: string }, example: Bearer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: NO_AUTENTICADO, message: 'Falta el token o no es válido (Authorization: Bearer <token>)' }
+    ForbiddenAdmin:
+      description: El token de administrador no puede consultar afiliaciones.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: PROHIBIDO, message: El token de administrador no puede consultar afiliaciones }
+
+  schemas:
+    Purpose:
+      type: string
+      enum: [TARIFA_SUBSIDIADA, SUBSIDIO_MONETARIO, VALIDACION_AFILIACION]
+    Result:
+      type: string
+      enum: [AFILIADO_OTRA_CAJA, NO_AFILIADO, INDETERMINADO]
+    Match:
+      type: object
+      required: [caja, validFrom, validTo, source, asOf]
+      properties:
+        caja: { type: string, example: NORTE }
+        validFrom: { type: string, format: date, nullable: true }
+        validTo: { type: string, format: date, nullable: true, description: null si la afiliación sigue vigente }
+        source: { type: string, enum: [ONLINE, FILE] }
+        asOf: { type: string, format: date, description: Fecha de corte del dato }
+    MatchV2:
+      allOf:
+        - $ref: '#/components/schemas/Match'
+        - type: object
+          required: [affiliateType]
+          properties:
+            affiliateType: { type: string, enum: [DEPENDIENTE, INDEPENDIENTE, PENSIONADO], nullable: true }
+    AffiliationResponseV1:
+      type: object
+      required: [requestId, result, matches, unavailable]
+      properties:
+        requestId: { type: string }
+        result: { $ref: '#/components/schemas/Result' }
+        matches: { type: array, items: { $ref: '#/components/schemas/Match' } }
+        unavailable: { type: array, items: { type: string }, description: Cajas que no respondieron a tiempo }
+    AffiliationResponseV2:
+      type: object
+      required: [requestId, result, matches, unavailable]
+      properties:
+        requestId: { type: string }
+        result: { $ref: '#/components/schemas/Result' }
+        matches: { type: array, items: { $ref: '#/components/schemas/MatchV2' } }
+        unavailable: { type: array, items: { type: string } }
+    AuditEntry:
+      type: object
+      required: [timestamp, requestId, requestingCaja, purpose, result, documentMasked, channel]
+      properties:
+        timestamp: { type: string, format: date-time }
+        requestId: { type: string, description: requestId de la consulta o jobId del lote }
+        requestingCaja: { type: string }
+        purpose: { $ref: '#/components/schemas/Purpose' }
+        result: { type: string }
+        documentMasked: { type: string, example: '******1472' }
+        channel: { type: string, enum: [ONLINE, BATCH] }
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, description: Código del error, example: NO_AUTENTICADO }
+        message: { type: string }
