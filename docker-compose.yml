@@ -64,6 +64,9 @@ services:
       CAJA_LINK_URL: http://caja-link:8083
     volumes:
       - ./test-results:/results
+      # Solo lectura: la prueba de secretos revisa que ningún token o clave esté escrito aquí.
+      - ./src:/repo/src:ro
+      - ./config:/repo/config:ro
     depends_on:
       caja-link:
         condition: service_healthy
