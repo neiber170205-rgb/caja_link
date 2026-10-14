@@ -43,12 +43,21 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AffiliationResponseV1' }
-              example:
-                requestId: 01M4XGBNN1Z3WGVNQKA6YFJM6E
-                result: AFILIADO_OTRA_CAJA
-                matches:
-                  - { caja: NORTE, validFrom: '2024-06-27', validTo: null, source: ONLINE, asOf: '2026-10-14' }
-                unavailable: []
+              examples:
+                afiliado:
+                  summary: Tiene afiliación vigente en otra caja
+                  value:
+                    requestId: 01M4XGBNN1Z3WGVNQKA6YFJM6E
+                    result: AFILIADO_OTRA_CAJA
+                    matches:
+                      - { caja: NORTE, validFrom: '2024-06-27', validTo: null, source: ONLINE, asOf: '2026-10-14' }
+                    unavailable: []
+                noAfiliado:
+                  summary: Todas las cajas respondieron y ninguna la tiene
+                  value: { requestId: 01M4Y17DXAZ20PYM9GDFAANRVM, result: NO_AFILIADO, matches: [], unavailable: [] }
+                indeterminado:
+                  summary: Caja Norte no respondió y las demás no la tienen (nunca se responde NO_AFILIADO)
+                  value: { requestId: 01M4Y17E8X7TMAKJVXYGJGDG1G, result: INDETERMINADO, matches: [], unavailable: [NORTE] }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ForbiddenAdmin' }
@@ -69,12 +78,26 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AffiliationResponseV2' }
-              example:
-                requestId: 01M4XGBNJXVA7P969CW9XSYWTP
-                result: AFILIADO_OTRA_CAJA
-                matches:
-                  - { caja: CENTRO, validFrom: '2025-02-11', validTo: null, source: FILE, asOf: '2026-10-03', affiliateType: PENSIONADO }
-                unavailable: []
+              examples:
+                afiliadoEnLinea:
+                  summary: Afiliado en una caja consultada en línea
+                  value:
+                    requestId: 01M4Y17EP9SVMNF9CK9QXDPA8H
+                    result: AFILIADO_OTRA_CAJA
+                    matches:
+                      - { caja: NORTE, validFrom: '2024-06-27', validTo: null, source: ONLINE, asOf: '2026-10-14', affiliateType: DEPENDIENTE }
+                    unavailable: []
+                afiliadoPorArchivo:
+                  summary: Afiliado en Caja Centro, que informa por archivo del día anterior
+                  value:
+                    requestId: 01M4XGBNJXVA7P969CW9XSYWTP
+                    result: AFILIADO_OTRA_CAJA
+                    matches:
+                      - { caja: CENTRO, validFrom: '2025-02-11', validTo: null, source: FILE, asOf: '2026-10-03', affiliateType: PENSIONADO }
+                    unavailable: []
+                indeterminado:
+                  summary: La única caja donde está afiliado no respondió
+                  value: { requestId: 01M4Y17EM8FPCAN149QXQW9XRM, result: INDETERMINADO, matches: [], unavailable: [NORTE] }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ForbiddenAdmin' }
@@ -125,7 +148,19 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-              example: { error: CSV_INVALIDO, message: El archivo debe tener una columna llamada document }
+              examples:
+                sinColumna:
+                  summary: El CSV no tiene la columna document
+                  value: { error: CSV_INVALIDO, message: 'El archivo debe tener una columna llamada document' }
+                vacio:
+                  summary: El CSV no trae ningún documento
+                  value: { error: CSV_VACIO, message: 'El archivo no trae documentos' }
+                formularioSinArchivo:
+                  summary: Se envió un formulario sin el campo file
+                  value: { error: CSV_INVALIDO, message: 'El formulario debe traer el archivo en el campo file' }
+                finalidadInvalida:
+                  summary: Se envió una finalidad que no es de las permitidas
+                  value: { error: FINALIDAD_INVALIDA, message: 'purpose debe ser uno de: TARIFA_SUBSIDIADA, SUBSIDIO_MONETARIO, VALIDACION_AFILIACION' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ForbiddenAdmin' }
         '413':
@@ -156,20 +191,26 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BatchJob' }
-              example:
-                jobId: 01M4XGBNS24474JSWGRJH2Z2RK
-                status: DONE
-                total: 3
-                processed: 3
-                results:
-                  - document: '8873901472'
-                    documentInput: '8873901472'
-                    result: AFILIADO_OTRA_CAJA
-                    matches:
-                      - { caja: NORTE, validFrom: '2024-06-27', validTo: null, source: ONLINE, asOf: '2026-10-14' }
-                    unavailable: []
-                  - { document: '999', documentInput: '999', result: NO_AFILIADO, matches: [], unavailable: [] }
-                  - { document: abc, documentInput: abc, result: DOCUMENTO_INVALIDO, matches: [], unavailable: [] }
+              examples:
+                enCurso:
+                  summary: El lote sigue procesándose; results va vacío hasta terminar
+                  value: { jobId: 01M4Y17ET5G9SS29KX2H2K8NKC, status: RUNNING, total: 10000, processed: 788, results: [] }
+                terminado:
+                  summary: El lote terminó; un resultado por documento, en el orden del archivo
+                  value:
+                    jobId: 01M4XGBNS24474JSWGRJH2Z2RK
+                    status: DONE
+                    total: 3
+                    processed: 3
+                    results:
+                      - document: '8873901472'
+                        documentInput: '8.873.901.472'
+                        result: AFILIADO_OTRA_CAJA
+                        matches:
+                          - { caja: NORTE, validFrom: '2024-06-27', validTo: null, source: ONLINE, asOf: '2026-10-14' }
+                        unavailable: []
+                      - { document: '999', documentInput: '999', result: NO_AFILIADO, matches: [], unavailable: [] }
+                      - { document: abc, documentInput: abc, result: DOCUMENTO_INVALIDO, matches: [], unavailable: [] }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ForbiddenAdmin' }
         '404':
@@ -210,7 +251,12 @@ paths:
                   result: AFILIADO_OTRA_CAJA
                   documentMasked: '******1472'
                   channel: ONLINE
-        '400': { $ref: '#/components/responses/BadRequest' }
+        '400':
+          description: El parámetro limit no es un número.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: PETICION_INVALIDA, message: 'Revise los parámetros de la petición' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403':
           description: El token es de una caja, no del administrador.
@@ -248,7 +294,16 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
-          example: { error: FINALIDAD_REQUERIDA, message: 'El parámetro purpose es obligatorio: TARIFA_SUBSIDIADA, SUBSIDIO_MONETARIO, VALIDACION_AFILIACION' }
+          examples:
+            finalidadRequerida:
+              summary: No se envió purpose
+              value: { error: FINALIDAD_REQUERIDA, message: 'El parámetro purpose es obligatorio: TARIFA_SUBSIDIADA, SUBSIDIO_MONETARIO, VALIDACION_AFILIACION' }
+            finalidadInvalida:
+              summary: purpose no es una de las finalidades permitidas
+              value: { error: FINALIDAD_INVALIDA, message: 'purpose debe ser uno de: TARIFA_SUBSIDIADA, SUBSIDIO_MONETARIO, VALIDACION_AFILIACION' }
+            documentoInvalido:
+              summary: El documento tiene letras u otros caracteres no permitidos
+              value: { error: DOCUMENTO_INVALIDO, message: 'El documento solo puede tener dígitos, puntos y espacios' }
     Unauthorized:
       description: Falta el token o no pertenece a ninguna caja.
       headers:
