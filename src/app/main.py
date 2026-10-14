@@ -26,9 +26,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import affiliations, audit as audit_api
+from app.api import affiliations, audit as audit_api, batch as batch_api
 from app.audit import AuditLog
 from app.auth import Authenticator
+from app.batch import BatchManager
 from app.config import load_settings
 from app.connectors import build_connectors
 from app.domain.service import AffiliationService
@@ -52,7 +53,7 @@ WARM_UP_SECONDS = 8.0
 # que está después corre al apagar.
 # Recibe: la aplicación FastAPI.
 # Al arrancar deja en app.state lo que usan las rutas: autenticador, servicio de
-# consulta y auditoría. Al apagar cierra las conexiones con las cajas.
+# consulta, auditoría y gestor de lotes. Al apagar cierra las conexiones con las cajas.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = load_settings()
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI):
     app.state.authenticator = Authenticator(settings)
     app.state.service = AffiliationService(build_connectors(settings, http))
     app.state.audit = AuditLog()
+    app.state.batch = BatchManager(app.state.service, app.state.audit)
     await app.state.service.warm_up(WARM_UP_SECONDS)
     logger.info("Caja Link listo")
     yield
@@ -82,6 +84,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(affiliations.router)
     app.include_router(audit_api.router)
+    app.include_router(batch_api.router)
 
     # Ruta de salud: la usa docker compose para saber si el servicio ya arrancó.
     # No pide token y no entrega información del sistema.
