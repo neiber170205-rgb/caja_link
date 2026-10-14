@@ -36,6 +36,7 @@ services:
   # Servicio de interoperabilidad del equipo (puerto de contrato 8083).
   # Solo ve de las cajas lo que ellas publican: sus servicios por la red interna,
   # el archivo diario de Caja Centro y el catálogo de config/ (ambos de solo lectura).
+  # También monta el contrato openapi.yaml, que muestra en http://localhost:8083/docs.
   # No depende de que las cajas estén arriba: si una no responde, lo informa.
   caja-link:
     build: ./src
@@ -45,6 +46,7 @@ services:
     volumes:
       - ./caja-centro:/data/caja-centro:ro
       - ./config:/app/config:ro
+      - ./openapi.yaml:/app/openapi.yaml:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/health', timeout=3)"]
       interval: 5s

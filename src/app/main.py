@@ -2,27 +2,35 @@
 # main.py — Punto de entrada de Caja Link.
 #
 # Arma la aplicación: lee la configuración, crea los conectores de las cajas,
-# registra las rutas y define cómo se responden los errores.
+# registra las rutas, define cómo se responden los errores y publica en /docs el
+# contrato OpenAPI que escribió el equipo.
 # Uvicorn carga la variable "app" de este archivo (ver src/Dockerfile).
 # =============================================================================
 
 # --- Librerías ---------------------------------------------------------------
+# json (estándar): deja el contrato OpenAPI con tipos que siempre se pueden enviar como JSON.
 # logging (estándar): configura los mensajes que se ven con "docker compose logs".
 # contextlib.asynccontextmanager (estándar): permite escribir en una sola función
 #     lo que pasa al arrancar y al apagar el servicio.
 # httpx: cliente HTTP asíncrono; se crea UNO solo y lo comparten todos los conectores
 #     para reutilizar conexiones con las cajas.
+# yaml (PyYAML): lee el contrato openapi.yaml para mostrarlo en /docs.
 # fastapi: FastAPI es la aplicación web; Request representa cada petición.
 # fastapi.exceptions.RequestValidationError: error de FastAPI cuando un parámetro no
 #     tiene el tipo esperado (por ejemplo limit=abc).
+# fastapi.openapi.utils.get_openapi: genera un contrato desde el código; se usa solo si
+#     falta openapi.yaml, para que /docs nunca quede vacío.
 # fastapi.responses.JSONResponse: respuesta JSON con el código HTTP que se indique.
 # starlette.exceptions.HTTPException: error HTTP genérico (ruta inexistente, método no permitido).
+import json
 import logging
 from contextlib import asynccontextmanager
 
 import httpx
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -47,6 +55,29 @@ MAX_KEEPALIVE_CONNECTIONS = 100
 
 # Espera máxima, al arrancar, a que las cajas activas acepten conexiones.
 WARM_UP_SECONDS = 8.0
+
+# Contrato OpenAPI escrito por el equipo. docker-compose.yml monta ahí el archivo
+# openapi.yaml de la raíz del repositorio, en solo lectura.
+CONTRACT_PATH = "/app/openapi.yaml"
+
+
+# Lee el contrato OpenAPI escrito por el equipo.
+# No recibe nada.
+# Devuelve: el contrato como diccionario, o None si el archivo no existe o no es un
+#           contrato válido (en ese caso deja un aviso en el registro).
+# El paso por JSON convierte a texto los valores que YAML interpreta como fechas,
+# para que /openapi.json siempre se pueda enviar.
+def load_contract() -> dict | None:
+    try:
+        with open(CONTRACT_PATH, encoding="utf-8") as handle:
+            contract = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError) as error:
+        logger.warning("No se pudo leer %s (%s); /docs mostrará el contrato generado desde el código", CONTRACT_PATH, error)
+        return None
+    if not isinstance(contract, dict) or "paths" not in contract:
+        logger.warning("%s no es un contrato OpenAPI; /docs mostrará el generado desde el código", CONTRACT_PATH)
+        return None
+    return json.loads(json.dumps(contract, default=str))
 
 
 # Ciclo de vida del servicio: lo que está antes de "yield" corre al arrancar y lo
@@ -85,6 +116,19 @@ def create_app() -> FastAPI:
     app.include_router(affiliations.router)
     app.include_router(audit_api.router)
     app.include_router(batch_api.router)
+
+    # Entrega el contrato que muestran /docs y /openapi.json.
+    # No recibe nada. Devuelve: el contrato de openapi.yaml, con sus ejemplos y el botón
+    # Authorize para probar con token; si el archivo falta, el que FastAPI genera desde
+    # el código. Se lee una sola vez, la primera vez que alguien lo pide: para ver un
+    # cambio en openapi.yaml hay que reiniciar el servicio.
+    def openapi_contract() -> dict:
+        if app.openapi_schema is None:
+            app.openapi_schema = load_contract() or get_openapi(
+                title=app.title, version=app.version, description=app.description, routes=app.routes)
+        return app.openapi_schema
+
+    app.openapi = openapi_contract
 
     # Ruta de salud: la usa docker compose para saber si el servicio ya arrancó.
     # No pide token y no entrega información del sistema.
