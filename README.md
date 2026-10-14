@@ -244,7 +244,15 @@ curl -H "Authorization: Bearer token-admin-123" "http://localhost:8083/api/v1/au
 ]
 ```
 
-Los tokens de estos ejemplos son ilustrativos: se usan los que haya en `.env`. El contrato completo, con un ejemplo de cada situación, está en [openapi.yaml](openapi.yaml); para verlo con formato se puede pegar en [editor.swagger.io](https://editor.swagger.io). Con el servicio arriba, `http://localhost:8083/docs` muestra además una versión que FastAPI genera desde el código, más sencilla.
+Los tokens de estos ejemplos son ilustrativos: se usan los que haya en `.env`. El contrato completo, con un ejemplo de cada situación, está en [openapi.yaml](openapi.yaml).
+
+**Probar desde el navegador.** Con el servicio arriba, `http://localhost:8083/docs` muestra ese mismo contrato y permite usarlo:
+
+1. Pulsar **Authorize** y pegar el token de una caja tal como está en `.env`, sin la palabra `Bearer`.
+2. Abrir una ruta y pulsar **Try it out**.
+3. Llenar los parámetros y pulsar **Execute**. Debajo aparece la respuesta real del servicio, y en **Examples** los ejemplos de cada situación (afiliado, no afiliado, indeterminado, errores).
+
+El servicio lee `openapi.yaml` una sola vez: si se modifica, hay que reiniciarlo con `docker compose restart caja-link`.
 
 ## Pruebas
 

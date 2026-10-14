@@ -7,8 +7,12 @@ info:
     pregunta si un documento tiene afiliación vigente en otra caja, sin ver datos
     personales (Ley 1581): solo caja, vigencia, fuente y fecha de corte.
 
-    Toda ruta exige el token de la caja que consulta (`Authorization: Bearer <token>`).
-    La auditoría solo se lee con el token de administrador.
+    Toda ruta, salvo `/health`, exige el token de la caja que consulta
+    (`Authorization: Bearer <token>`). La auditoría solo se lee con el token de administrador.
+
+    Para probar desde esta página: botón **Authorize**, pegar el token (sin la palabra
+    Bearer), y en cada ruta **Try it out** y **Execute**. Cada respuesta trae ejemplos de
+    sus distintas situaciones en el menú **Examples**.
 servers:
   - url: http://localhost:8083
     description: Entorno local (docker compose)
@@ -23,6 +27,8 @@ tags:
     description: Envío de un archivo CSV con muchos documentos; se procesa en segundo plano.
   - name: Auditoría
     description: Registro de quién consultó, para qué y con qué resultado.
+  - name: Salud
+    description: Estado del servicio, sin token.
 
 paths:
   /api/v1/affiliations/{document}:
@@ -264,6 +270,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: PROHIBIDO, message: La auditoría solo se consulta con el token de administrador }
+
+  /health:
+    get:
+      tags: [Salud]
+      summary: Estado del servicio
+      description: Responde si el servicio está arriba. No pide token; docker compose la usa para saber cuándo el servicio está listo.
+      security: []
+      responses:
+        '200':
+          description: El servicio está funcionando.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [UP] }
+              example: { status: UP }
 
 components:
   securitySchemes:
