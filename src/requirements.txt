@@ -25,3 +25,7 @@ PyYAML==6.0.2
 # defusedxml — lector de XML seguro. Interpreta la respuesta SOAP de Caja Oriente
 # bloqueando ataques conocidos de XML (entidades externas, "billion laughs").
 defusedxml==0.7.1
+
+# python-multipart — lector de formularios. FastAPI lo necesita para recibir el
+# archivo CSV del lote cuando llega como formulario (campo "file").
+python-multipart==0.0.20
