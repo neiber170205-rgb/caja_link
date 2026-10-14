@@ -19,6 +19,8 @@ security:
 tags:
   - name: Consulta en línea
     description: Consulta de un documento contra todas las cajas, en menos de 5 segundos.
+  - name: Cruce por lote
+    description: Envío de un archivo CSV con muchos documentos; se procesa en segundo plano.
   - name: Auditoría
     description: Registro de quién consultó, para qué y con qué resultado.
 
@@ -76,6 +78,106 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ForbiddenAdmin' }
+
+  /api/v1/batch-checks:
+    post:
+      tags: [Cruce por lote]
+      summary: Enviar un cruce por lote
+      description: |
+        Para las cajas consumidoras. Recibe un CSV con la columna `document` y responde
+        de inmediato 202 con el `jobId`; el lote corre en segundo plano. Repetir el envío
+        con la misma `Idempotency-Key` devuelve el mismo `jobId` sin procesarlo de nuevo.
+        Máximo 5 MB y 100.000 documentos.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Llave que elige la caja para reenviar el lote sin duplicarlo (máximo 200 caracteres). Se recomienda enviarla siempre.
+          schema: { type: string, maxLength: 200 }
+          example: nomina-2026-10-14
+        - name: purpose
+          in: query
+          required: false
+          description: Finalidad del cruce. Si no se envía se registra VALIDACION_AFILIACION.
+          schema: { $ref: '#/components/schemas/Purpose' }
+          example: VALIDACION_AFILIACION
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string }
+            example: "document\n8873901472\n999\nabc\n"
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary, description: Archivo CSV con la columna document }
+      responses:
+        '202':
+          description: Lote recibido.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchAccepted' }
+              example: { jobId: 01M4XGBNS24474JSWGRJH2Z2RK, status: PENDING }
+        '400':
+          description: CSV vacío, sin la columna document, o formulario sin el campo file; o finalidad inválida.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: CSV_INVALIDO, message: El archivo debe tener una columna llamada document }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenAdmin' }
+        '413':
+          description: El archivo pasa de 5 MB o de 100.000 documentos.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: LOTE_DEMASIADO_GRANDE, message: El archivo supera el tamaño máximo permitido }
+
+  /api/v1/batch-checks/{jobId}:
+    get:
+      tags: [Cruce por lote]
+      summary: Estado y resultados de un lote
+      description: |
+        Para la caja que envió el lote (ninguna otra puede verlo). `status` pasa por
+        PENDING, RUNNING y DONE; `results` va vacío hasta DONE y luego trae un resultado
+        por documento, en el mismo orden del archivo.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          description: Identificador entregado al enviar el lote.
+          schema: { type: string }
+          example: 01M4XGBNS24474JSWGRJH2Z2RK
+      responses:
+        '200':
+          description: Estado del lote.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchJob' }
+              example:
+                jobId: 01M4XGBNS24474JSWGRJH2Z2RK
+                status: DONE
+                total: 3
+                processed: 3
+                results:
+                  - document: '8873901472'
+                    documentInput: '8873901472'
+                    result: AFILIADO_OTRA_CAJA
+                    matches:
+                      - { caja: NORTE, validFrom: '2024-06-27', validTo: null, source: ONLINE, asOf: '2026-10-14' }
+                    unavailable: []
+                  - { document: '999', documentInput: '999', result: NO_AFILIADO, matches: [], unavailable: [] }
+                  - { document: abc, documentInput: abc, result: DOCUMENTO_INVALIDO, matches: [], unavailable: [] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenAdmin' }
+        '404':
+          description: El lote no existe o pertenece a otra caja.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: LOTE_NO_ENCONTRADO, message: No existe un lote con ese jobId para esta caja }
 
   /api/v1/audit:
     get:
@@ -201,6 +303,30 @@ components:
         result: { $ref: '#/components/schemas/Result' }
         matches: { type: array, items: { $ref: '#/components/schemas/MatchV2' } }
         unavailable: { type: array, items: { type: string } }
+    BatchAccepted:
+      type: object
+      required: [jobId, status]
+      properties:
+        jobId: { type: string }
+        status: { type: string, enum: [PENDING, RUNNING, DONE] }
+    BatchResult:
+      type: object
+      required: [document, documentInput, result, matches, unavailable]
+      properties:
+        document: { type: string, description: Documento normalizado }
+        documentInput: { type: string, description: Documento tal como venía en el archivo }
+        result: { type: string, enum: [AFILIADO_OTRA_CAJA, NO_AFILIADO, INDETERMINADO, DOCUMENTO_INVALIDO] }
+        matches: { type: array, items: { $ref: '#/components/schemas/Match' } }
+        unavailable: { type: array, items: { type: string } }
+    BatchJob:
+      type: object
+      required: [jobId, status, total, processed, results]
+      properties:
+        jobId: { type: string }
+        status: { type: string, enum: [PENDING, RUNNING, DONE] }
+        total: { type: integer }
+        processed: { type: integer }
+        results: { type: array, items: { $ref: '#/components/schemas/BatchResult' } }
     AuditEntry:
       type: object
       required: [timestamp, requestId, requestingCaja, purpose, result, documentMasked, channel]
