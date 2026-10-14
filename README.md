@@ -112,25 +112,27 @@ Todo se configura en `.env`, que nunca se sube al repositorio; `.env.example` tr
 
 | Variable | Para qué sirve | Ejemplo |
 |---|---|---|
-| `NORTE_TOKEN` | Token de Caja Norte cuando consulta | `token-norte-123` |
-| `ORIENTE_TOKEN` | Token de Caja Oriente cuando consulta | `token-oriente-123` |
-| `CENTRO_TOKEN` | Token de Caja Centro cuando consulta | `token-centro-123` |
-| `SUR_TOKEN` | Token de Caja Sur cuando consulta | `token-sur-123` |
-| `ADMIN_TOKEN` | Token del administrador; solo sirve para leer la auditoría | `token-admin-123` |
+| `NORTE_TOKEN` | Token de Caja Norte cuando consulta | `cambiar-norte` |
+| `ORIENTE_TOKEN` | Token de Caja Oriente cuando consulta | `cambiar-oriente` |
+| `CENTRO_TOKEN` | Token de Caja Centro cuando consulta | `cambiar-centro` |
+| `SUR_TOKEN` | Token de Caja Sur cuando consulta | `cambiar-sur` |
+| `ADMIN_TOKEN` | Token del administrador; solo sirve para leer la auditoría | `cambiar-admin` |
 
 **Cómo entra Caja Link a cada caja:**
 
 | Variable | Para qué sirve | Ejemplo |
 |---|---|---|
 | `CAJA_NORTE_URL` | Dirección del servicio de Caja Norte | `http://caja-norte:9001` |
-| `CAJA_NORTE_API_KEY` | Clave para consultar a Caja Norte | La que entregue Caja Norte |
+| `CAJA_NORTE_API_KEY` | Clave para consultar a Caja Norte | Ver `.env.example` (no se repite aquí) |
 | `CAJA_ORIENTE_URL` | Dirección del servicio SOAP de Caja Oriente | `http://caja-oriente:9002/ws/AfiliacionService` |
-| `CAJA_ORIENTE_USER` | Usuario para consultar a Caja Oriente | El que entregue Caja Oriente |
-| `CAJA_ORIENTE_PASSWORD` | Clave para consultar a Caja Oriente | La que entregue Caja Oriente |
+| `CAJA_ORIENTE_USER` | Usuario para consultar a Caja Oriente | `caja-link` |
+| `CAJA_ORIENTE_PASSWORD` | Clave para consultar a Caja Oriente | Ver `.env.example` (no se repite aquí) |
 | `CAJA_CENTRO_DIR` | Carpeta, dentro del contenedor, donde está el archivo diario de Caja Centro | `/data/caja-centro` |
 | `CAJA_SUR_URL` | Dirección del servicio de Caja Sur | `http://caja-sur:9004` |
-| `CAJA_SUR_TOKEN` | Token para consultar a Caja Sur | El que entregue Caja Sur |
+| `CAJA_SUR_TOKEN` | Token para consultar a Caja Sur | Ver `.env.example` (no se repite aquí) |
 | `CAJA_SUR_ENABLED` | Activa Caja Sur como cuarta caja | `false` |
+
+Las tres claves con las que Caja Link entra a las cajas no se copian en este documento: el reglamento del reto prohíbe que el valor de una clave aparezca en un archivo distinto de `.env` y `.env.example`.
 
 **Puertos en la máquina** (cambiar solo si están ocupados):
 
@@ -180,7 +182,7 @@ El resultado de una consulta es uno de tres:
 **1. Consultar un documento — `GET /api/v1/affiliations/{document}`**
 
 ```bash
-curl -H "Authorization: Bearer token-oriente-123" \
+curl -H "Authorization: Bearer cambiar-oriente" \
   "http://localhost:8083/api/v1/affiliations/8873901472?purpose=VALIDACION_AFILIACION"
 ```
 
@@ -202,7 +204,7 @@ El documento se puede escribir con puntos, espacios o ceros a la izquierda. La c
 Igual a la anterior; cada coincidencia agrega `affiliateType` (`DEPENDIENTE`, `INDEPENDIENTE` o `PENSIONADO`).
 
 ```bash
-curl -H "Authorization: Bearer token-oriente-123" \
+curl -H "Authorization: Bearer cambiar-oriente" \
   "http://localhost:8083/api/v2/affiliations/8873901472?purpose=VALIDACION_AFILIACION"
 ```
 
@@ -211,7 +213,7 @@ curl -H "Authorization: Bearer token-oriente-123" \
 Recibe un CSV con la columna `document` y responde de inmediato con un `jobId`. Repetir el envío con la misma `Idempotency-Key` devuelve el mismo `jobId`.
 
 ```bash
-curl -X POST -H "Authorization: Bearer token-norte-123" \
+curl -X POST -H "Authorization: Bearer cambiar-norte" \
   -H "Idempotency-Key: nomina-octubre" -H "Content-Type: text/csv" \
   --data-binary @data/lote_10000.csv http://localhost:8083/api/v1/batch-checks
 ```
@@ -225,7 +227,7 @@ curl -X POST -H "Authorization: Bearer token-norte-123" \
 `status` pasa por `PENDING`, `RUNNING` y `DONE`. Al terminar, `results` trae un resultado por documento, en el orden del archivo. Solo la caja que envió el lote puede verlo.
 
 ```bash
-curl -H "Authorization: Bearer token-norte-123" \
+curl -H "Authorization: Bearer cambiar-norte" \
   http://localhost:8083/api/v1/batch-checks/01M4VTMRE8N86WHEVWBMDJVB08
 ```
 
@@ -234,7 +236,7 @@ curl -H "Authorization: Bearer token-norte-123" \
 Solo con el token de administrador. Muestra quién consultó, para qué y con qué resultado; el documento aparece enmascarado.
 
 ```bash
-curl -H "Authorization: Bearer token-admin-123" "http://localhost:8083/api/v1/audit?limit=100"
+curl -H "Authorization: Bearer cambiar-admin" "http://localhost:8083/api/v1/audit?limit=100"
 ```
 
 ```json
@@ -244,7 +246,7 @@ curl -H "Authorization: Bearer token-admin-123" "http://localhost:8083/api/v1/au
 ]
 ```
 
-Los tokens de estos ejemplos son ilustrativos: se usan los que haya en `.env`. El contrato completo, con un ejemplo de cada situación, está en [openapi.yaml](openapi.yaml).
+Los tokens de estos ejemplos son los de `.env.example`; si cambiaste los tuyos en `.env`, usa esos. El contrato completo, con un ejemplo de cada situación, está en [openapi.yaml](openapi.yaml).
 
 **Probar desde el navegador.** Con el servicio arriba, `http://localhost:8083/docs` muestra ese mismo contrato y permite usarlo:
 
