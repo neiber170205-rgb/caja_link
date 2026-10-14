@@ -52,3 +52,18 @@ services:
       retries: 12
       start_period: 5s
     restart: unless-stopped
+
+  # Pruebas del equipo: docker compose --profile test run --rm tests
+  # Prueban caja-link en funcionamiento por la red interna y dejan el reporte
+  # JUnit XML en ./test-results/. Leen los tokens del .env, nunca escritos en el código.
+  tests:
+    build: ./tests
+    profiles: ["test"]
+    env_file: .env
+    environment:
+      CAJA_LINK_URL: http://caja-link:8083
+    volumes:
+      - ./test-results:/results
+    depends_on:
+      caja-link:
+        condition: service_healthy

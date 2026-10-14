@@ -1,0 +1,12 @@
+# =============================================================================
+# Librerías del contenedor de pruebas. Versiones fijas para que el reporte
+# salga igual en la máquina del equipo y en el servidor que califica.
+# =============================================================================
+
+# pytest — ejecuta las pruebas (archivos test_*.py) y escribe el reporte JUnit XML
+# en test-results/ con la opción --junitxml.
+pytest==8.3.4
+
+# HTTPX — cliente HTTP. Las pruebas llaman al servicio caja-link en funcionamiento
+# (y a /__chaos de las cajas simuladas) igual que lo haría una caja consumidora.
+httpx==0.28.1
